@@ -9,13 +9,14 @@
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
     See the License here <http://www.gnu.org/licenses/gpl-3.0.html>.
 ***********************************************************************/
-$page_security = $_POST['PARAM_0'] == $_POST['PARAM_1'] ?
+$page_security = $_POST['PARAM_0'] == $_POST['PARAM_3'] ?
 	'SA_SUPPTRANSVIEW' : 'SA_SUPPBULKREP';
 // ----------------------------------------------------------------
-// $ Revision:	2.2 $
+// $ Revision:	2.4 $
+// Creator:	Jim Cunning - Based on rep_check_print by Joe Hunt
 // Creator:	Joe Hunt - Based on the new Report Engine by Tom Hallman
 // Creator:	Based on Tom Hallman's Report.
-// Date:	2010-03-03
+// Date:	2026-11-17
 // Title:	Printable Check
 // ----------------------------------------------------------------
 $path_to_root="..";
@@ -67,7 +68,10 @@ function print_check()
 
     // Get the payment
     $from = $_POST['PARAM_0'];
-    $destination = $_POST['PARAM_1'];
+    $check_at_top = $_POST['PARAM_1'];
+    $memo_on_check = $_POST['PARAM_2'];
+    $omit_address = $_POST['PARAM_3'];
+    $destination = $_POST['PARAM_4'];
  	
  	$trans_no = explode("-", $from);
 
@@ -81,6 +85,9 @@ function print_check()
 
     // Get check information
     $total_amt = $from_trans['Total'];
+    $currency = get_currency($from_trans['curr_code']);
+    $curr_name = $currency['currency'];
+    $curr_symbol = $currency['curr_symbol'];
     
     $date = sql2date($from_trans['tran_date']);
     $memo = get_comments_string($trans_no[1], $trans_no[0]);
@@ -90,110 +97,132 @@ function print_check()
 	$rep->SetHeaderType(null);    
     $rep->NewPage();
     // Set the font
-    $rep->Font('','courier');
+    $rep->Font('','arial');
     $rep->fontSize = 12;
-   
-    //////////////////
-    // Check portion
-    
-    $rep->NewLine(1,0,76);
-    $rep->cols = array(63, 340, 470, 565);
-    $rep->aligns = array('left', 'left', 'right', 'right');
-    
-    // Pay to    
-    $rep->TextCol(0, 1, $from_trans['supp_name']);
-    
-    // Date
-    $rep->DateCol(1, 2, $rep->DatePrettyPrint($date, 0, 0));
-    
-    // Amount (numeric)
-    $rep->TextCol(2, 3, '***'.number_format2(-$total_amt, $dec));
-    
-    // Amount (words)
-    $rep->NewLine(1,0,23);
-    $rep->TextCol(0, 2, $from_trans['curr_code'].": ". price_in_words(-$total_amt, ST_CHEQUE));
-    
-    // Memo
-    $rep->NewLine(1,0,78);
-    $rep->TextCol(0, 1, $memo);
 
-  	$rep->company = get_company_prefs();
-  /////////////////////
-    // Item details x 2 
-    
-    for ($section=1; $section<=2; $section++) 
+	// Set check section positions
+	$row_top = 786;		// top 3.5 inch section
+	$row_mid = 540;		// middle 3.5 inch section
+	$row_bot = 288;		// bottom 4.0 inch section
+  
+	$rep->company = get_company_prefs();
+
+    for ($section=1; $section<=3; $section++) 
     {
-        $rep->fontSize = 12;        
-        // Move down to the correct section
-        $rep->row = $section == 1 ? 505 : 255;
-        $rep->cols = array(20, 340, 470, 588);
-        $rep->aligns = array('left', 'left', 'right', 'right');
-        
-        // Pay to
-        $rep->Font('b');
-        $rep->TextCol(0, 1, $from_trans['supp_name']);
-        $rep->Font();
-        
-        // Date
-        $rep->DateCol(1, 2, $rep->DatePrettyPrint($date, 0, 0));
-        
-        // Amount (numeric)
-        $rep->TextCol(2, 3, number_format2(-$total_amt, 2));
-    
-        // Add Trans # + Reference
-        $rep->NewLine();
-        if ($print_invoice_no == 0)
-        	$tno = $from_trans['reference'];
-        else
-        	$tno = $from_trans['trans_no'];
-        $rep->TextCol(0, 3, sprintf( _("Payment # %s - from Customer: %s - %s"), $tno,
-        	$from_trans['supp_account_no'], $rep->company['coy_name']));
-        
-        // Add memo
-        $rep->NewLine();
-        $rep->TextCol(0, 3, _("Memo: ").$memo);    
-        
-        // TODO: Do we want to set a limit on # of item details?  (Max is probably 6-7)
+		// Move to the top of correct section
+        $rep->row = $section == 1 ? $row_top : ($section == 2 ? $row_mid : $row_bot);
 
-        // Get item details
-		$result = get_allocations_for_remittance($from_trans['supplier_id'], $from_trans['type'], $from_trans['trans_no']);
-        // Fill in details
-        $rep->NewLine(2);
-        $rep->fontSize = 10;
-        // Use different columns now for the additional info
-        $rep->cols = array(20, 160, 235, 290, 370, 480, 588);
-        $rep->aligns = array('left', 'left', 'left', 'right', 'right', 'right');
-        
-        // Add headers
-        $rep->Font('b');
-        $rep->TextCol(0, 1, _("Type/Id"));
-        $rep->TextCol(1, 2, _("Trans Date"));
-        $rep->TextCol(2, 3, _("Due Date"));
-        $rep->TextCol(3, 4, _("Total Amount"));
-        $rep->TextCol(4, 5, _("Left to Allocate"));
-        $rep->TextCol(5, 6, _("This Allocation"));
-        $rep->NewLine();
-        
-        $rep->Font();    
-		$total_allocated = 0;
-		while ($item=db_fetch($result))
+		if (($section == 1 && $check_at_top == 1) || ($section == 2 && $check_at_top != 1))
 		{
-           	$rep->TextCol(0, 1, $systypes_array[$item['type']]." ".$item['supp_reference']);
-           	$rep->TextCol(1, 2, sql2date($item['tran_date']));
-           	$rep->TextCol(2, 3, sql2date($item['due_date']));
-           	$rep->AmountCol(3, 4, $item['Total'], $dec);
-           	$rep->AmountCol(4, 5, $item['Total'] - $item['alloc'], $dec);
-           	$rep->AmountCol(5, 6, $item['amt'], $dec);
-           	$total_allocated += $item['amt'];
-       		$rep->NewLine(1, 0, $rep->lineHeight + 3); // Space it out
-    	}
-    	$rep->NewLine();
-       	$rep->TextCol(4, 5, _("Total Allocated"));
-       	$rep->AmountCol(5, 6, $total_allocated, $dec);
-    	$rep->NewLine();
-       	$rep->TextCol(4, 5, _("Left to Allocate"));
-       	$rep->AmountCol(5, 6, -$from_trans['Total'] - $total_allocated, $dec);
-    	
+			//////////////////
+			// Check portion
+			$rep->fontSize = 12;        
+			$rep->cols = array(72, 340, 470, 565);
+			$rep->aligns = array('left', 'left', 'right', 'right');
+			
+			// Memo
+			$rep->NewLine(1,0,92);
+			if ($memo_on_check == 1) {
+				$rep->TextCol(0, 1, $memo);
+			}
+			$rep->NewLine(1,0,30);
+			
+			// Date
+			$rep->DateCol(1, 2, $rep->DatePrettyPrint($date, 0, 0));
+			
+			// Amount (numeric)
+			$rep->TextCol(2, 3, '***'.$curr_symbol.number_format2(-$total_amt, $dec));
+			
+			// Amount (words)
+			$rep->NewLine(1,0,14);
+			$rep->TextCol(0, 2, "*****". price_in_words(-$total_amt, ST_CHEQUE). " $curr_name*****");
+			
+			// Pay to    
+			$rep->NewLine(1,0,24);
+			$rep->TextCol(0, 1, $from_trans['supp_name']);
+			if ($omit_address == 0)
+			{
+				$rep->NewLine();
+				$rep->TextColLines(0, 1, $from_trans['address']);
+			}
+		}
+
+		if (($section == 1 && $check_at_top != 1) ||($section == 2 && $check_at_top == 1) || $section == 3 )
+		{
+			/////////////////////
+			// Item details x 2 
+			$rep->NewLine(1,0,36);
+		
+			$rep->fontSize = 12;        
+			$rep->cols = array(20, 340, 470, 588);
+			$rep->aligns = array('left', 'left', 'right', 'right');
+			
+			// Pay to
+			$rep->Font('b');
+			$rep->TextCol(0, 1, $from_trans['supp_name']);
+			$rep->Font();
+			
+			// Date
+			$rep->DateCol(1, 2, $rep->DatePrettyPrint($date, 0, 0));
+			
+			// Amount (numeric)
+			$rep->TextCol(2, 3, number_format2(-$total_amt, 2));
+		
+			// Add Trans # + Reference
+			$rep->NewLine();
+			if ($print_invoice_no == 0)
+				$tno = $from_trans['reference'];
+			else
+				$tno = $from_trans['trans_no'];
+			$rep->TextCol(0, 3, sprintf( _("Payment # %s - from Customer: %s - %s"), $tno,
+				$from_trans['supp_account_no'], $rep->company['coy_name']));
+			
+			// Add memo
+			$rep->NewLine();
+			$rep->TextCol(0, 3, _("Memo: ").$memo);    
+			
+			// TODO: Do we want to set a limit on # of item details?  (Max is probably 6-7)
+
+			// Get item details
+			$result = get_allocations_for_remittance($from_trans['supplier_id'], $from_trans['type'], $from_trans['trans_no']);
+			// Fill in details
+			$rep->NewLine(2);
+			$rep->fontSize = 10;
+			// Use different columns now for the additional info
+			$rep->cols = array(20, 160, 235, 290, 370, 480, 588);
+			$rep->aligns = array('left', 'left', 'left', 'right', 'right', 'right');
+			
+			// Add headers
+			$rep->Font('b');
+			$rep->TextCol(0, 1, _("Type/Id"));
+			$rep->TextCol(1, 2, _("Trans Date"));
+			$rep->TextCol(2, 3, _("Due Date"));
+			$rep->TextCol(3, 4, _("Total Amount"));
+			$rep->TextCol(4, 5, _("Left to Allocate"));
+			$rep->TextCol(5, 6, _("This Allocation"));
+			$rep->NewLine();
+			
+			$rep->Font();    
+			$total_allocated = 0;
+			while ($item=db_fetch($result))
+			{
+				$rep->TextCol(0, 1, $systypes_array[$item['type']]." ".$item['supp_reference']);
+				$rep->TextCol(1, 2, sql2date($item['tran_date']));
+				$rep->TextCol(2, 3, sql2date($item['due_date']));
+				$rep->AmountCol(3, 4, $item['Total'], $dec);
+				$rep->AmountCol(4, 5, $item['Total'] - $item['alloc'], $dec);
+				$rep->AmountCol(5, 6, $item['amt'], $dec);
+				$total_allocated += $item['amt'];
+				$rep->NewLine(1, 0, $rep->lineHeight + 3); // Space it out
+			}
+			$rep->NewLine();
+			$rep->TextCol(4, 5, _("Total Allocated"));
+			$rep->AmountCol(5, 6, $total_allocated, $dec);
+			$rep->NewLine();
+			$rep->TextCol(4, 5, _("Left to Allocate"));
+			$rep->AmountCol(5, 6, -$from_trans['Total'] - $total_allocated, $dec);
+		}
+			
     } // end of section
     
     $rep->End();
